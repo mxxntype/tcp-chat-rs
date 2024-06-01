@@ -1,4 +1,4 @@
-FROM rust:latest AS chef 
+FROM huecker.io/library/rust:latest AS chef 
 
 RUN cargo install cargo-chef
 WORKDIR app
@@ -24,7 +24,7 @@ RUN \
 
 
 # We do not need the Rust toolchain to run the binary!
-FROM debian:bookworm-slim AS runtime
+FROM huecker.io/library/debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install libpq-dev --yes
 WORKDIR app
 COPY --from=builder /app/app /usr/local/bin/app

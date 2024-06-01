@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
     postgresql:
-        image: postgres:16
+        image: huecker.io/library/postgres:16
         hostname: ${POSTGRES_HOST}
         restart: unless-stopped
         env_file:
@@ -24,7 +24,7 @@ services:
             - postgresql
 
     redis:
-        image: redis:latest
+        image: huecker.io/library/redis:latest
         hostname: ${REDIS_HOST}
         restart: unless-stopped
         env_file:
@@ -50,7 +50,7 @@ services:
             - redis
 
     pgadmin:
-        image: elestio/pgadmin:latest
+        image: huecker.io/elestio/pgadmin:latest
         restart: unless-stopped
         env_file:
             - .envrc
@@ -61,23 +61,23 @@ services:
         depends_on:
             - postgresql
 
-    llm:
-        image: ollama/ollama:latest
-        hostname: ${LLM_HOST}
-        restart: unless-stopped
-        tty: true
-        ports:
-            - "${LLM_PORT}:${LLM_PORT}"
-        volumes:
-            - llm:/root/.ollama
+    # llm:
+    #     image: huecker.io/ollama/ollama:latest
+    #     hostname: ${LLM_HOST}
+    #     restart: unless-stopped
+    #     tty: true
+    #     ports:
+    #         - "${LLM_PORT}:${LLM_PORT}"
+    #     volumes:
+    #         - llm:/root/.ollama
 
-    llm-setup:
-        build:
-            context: .
-            dockerfile: llm/Dockerfile
-        restart: unless-stopped
-        env_file:
-            - .envrc
+    # llm-setup:
+    #     build:
+    #         context: .
+    #         dockerfile: llm/Dockerfile
+    #     restart: unless-stopped
+    #     env_file:
+    #         - .envrc
 
 volumes:
     postgresql-data:

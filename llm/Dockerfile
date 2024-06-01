@@ -1,4 +1,4 @@
-FROM alpine/curl
+FROM huecker.io/alpine/curl
 
 COPY . .
 
