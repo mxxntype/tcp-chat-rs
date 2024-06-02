@@ -1765,8 +1765,10 @@ dependencies = [
  "prost",
  "prost-types",
  "ratatui",
+ "tcp-chat",
  "tokio",
  "tonic",
+ "uuid",
 ]
 
 [[package]]
