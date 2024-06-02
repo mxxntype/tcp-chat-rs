@@ -1,9 +1,10 @@
 {
+    lib,
     pkgs,
     ...
 }:
 
-pkgs.mkShell {
+pkgs.mkShell rec {
     NIX_CONFIG = "extra-experimental-features = nix-command flakes repl-flake";
 
     # FIXME: Does not get exported for some reason.
@@ -17,6 +18,9 @@ pkgs.mkShell {
         grpcurl  # Command-line tool for interacting with gRPC servers.
         bloomrpc # GUI Client for gRPC Services (like Postman).
         postgresql
+        openssl.out
         openssl.dev
     ];
+
+    LD_LIBRARY_PATH = lib.makeLibraryPath buildInputs;
 }
