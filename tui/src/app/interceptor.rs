@@ -1,12 +1,13 @@
 use tcp_chat::{auth::AuthenticatedRequest, proto::AuthPair};
 use tonic::{Request, Status};
 
+#[derive(Debug)]
 pub struct Interceptor {
     auth_pair: AuthPair,
 }
 
 impl Interceptor {
-    pub fn new(auth_pair: AuthPair) -> Self {
+    pub const fn new(auth_pair: AuthPair) -> Self {
         Self { auth_pair }
     }
 }

@@ -1,5 +1,3 @@
-pub mod interceptor;
-
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use tcp_chat::entities::{Message, Room, User};
@@ -14,30 +12,31 @@ type UserUUID = uuid::Uuid;
 type RoomUUID = uuid::Uuid;
 type MessageUUID = uuid::Uuid;
 
+#[derive(Debug)]
 pub struct Chat<I: Interceptor> {
     /// gRPC clients for easy access.
-    client: ChatClient<InterceptedService<Channel, I>>,
+    pub(crate) client: ChatClient<InterceptedService<Channel, I>>,
 
     /// The currently logged in user.
-    user: User,
+    pub(crate) user: User,
 
     /// An intermediate buffer to hold the message being written.
-    message_draft: String,
+    pub(crate) message_draft: String,
 
     /// A list of users known to this session.
     /// Acts as a cache to avoid unnecessary lookup requests to the server.
-    users: HashMap<UserUUID, proto::User>,
+    pub(crate) users: HashMap<UserUUID, proto::User>,
 
     /// A list of rooms the user is a member of.
     /// Acts as a cache to avoid unnecessary lookup requests to the server.
-    rooms: HashMap<RoomUUID, Room>,
+    pub(crate) rooms: HashMap<RoomUUID, Room>,
 
     /// A list of all messages in each room.
     /// Acts as a cache to avoid unnecessary lookup requests to the server.
-    messages: HashMap<MessageUUID, Message>,
+    pub(crate) messages: HashMap<MessageUUID, Message>,
 }
 
-impl Chat<interceptor::Interceptor> {
+impl Chat<crate::app::Interceptor> {
     pub async fn new(user: User) -> Self {
         let tls_config = ClientTlsConfig::new()
             .ca_certificate(Certificate::from_pem(crate::TLS_CERT))
@@ -48,7 +47,7 @@ impl Chat<interceptor::Interceptor> {
             .connect()
             .await
             .expect("Could not connect to the Chat service!");
-        let interceptor = interceptor::Interceptor::new(user.auth_pair());
+        let interceptor = crate::app::Interceptor::new(user.auth_pair());
 
         Self {
             user: user.clone(),
