@@ -1,7 +1,7 @@
 use crate::app::{Chat, Interceptor};
 use std::ops::{Deref, DerefMut};
-use tcp_chat::entities::User;
-use tcp_chat::proto::{registry_client::RegistryClient, UserCredentials};
+use tcp_chat_server::entities::User;
+use tcp_chat_server::proto::{registry_client::RegistryClient, UserCredentials};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig};
 use tonic::Status;
 use uuid::Uuid;

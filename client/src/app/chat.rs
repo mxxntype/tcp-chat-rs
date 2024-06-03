@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
-use tcp_chat::entities::{Message, Room, User};
-use tcp_chat::proto;
-use tcp_chat::proto::chat_client::ChatClient;
+use tcp_chat_server::entities::{Message, Room, User};
+use tcp_chat_server::proto;
+use tcp_chat_server::proto::chat_client::ChatClient;
 use tonic::service::interceptor::InterceptedService;
 use tonic::service::Interceptor;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig};

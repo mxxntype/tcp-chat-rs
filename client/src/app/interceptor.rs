@@ -1,4 +1,4 @@
-use tcp_chat::{auth::AuthenticatedRequest, proto::AuthPair};
+use tcp_chat_server::{auth::AuthenticatedRequest, proto::AuthPair};
 use tonic::{Request, Status};
 
 #[derive(Debug)]

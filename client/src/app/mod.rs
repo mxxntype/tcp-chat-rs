@@ -5,15 +5,20 @@ mod ui;
 
 pub use chat::Chat;
 pub use interceptor::Interceptor;
-use ratatui::Terminal;
 pub use registry::Registry;
 
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::Terminal;
 use std::{io, panic, time::Duration};
+use tcp_chat_server::entities::Room;
+use tcp_chat_server::proto::serverside_user_event::Event as UserEvent;
+use tcp_chat_server::proto::ServersideUserEvent;
 use tokio::{sync::oneshot, task::JoinHandle};
+use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 #[derive(Debug)]
 pub enum Stage {
@@ -131,6 +136,43 @@ where
         self.terminal.show_cursor()?;
 
         Ok(())
+    }
+
+    async fn user_event_thread(&mut self) {
+        if let Stage::LoggedIn(chat) = &mut self.stage {
+            let mut event_stream = chat
+                .subscribe_to_user(())
+                .await
+                .expect("Could not subscribe to user events")
+                .into_inner();
+
+            while let Some(Ok(ServersideUserEvent {
+                event: Some(event), ..
+            })) = event_stream.next().await
+            {
+                match event {
+                    UserEvent::AddedToRoom(proto_room_uuid) => {
+                        let room_uuid = Uuid::try_from(proto_room_uuid.clone())
+                            .expect("Server returned invalid room UUID");
+                        if !chat.rooms.contains_key(&room_uuid) {
+                            let room = chat
+                                .lookup_room(proto_room_uuid)
+                                .await
+                                .expect("Could not look up room")
+                                .into_inner();
+                            let _ = chat.rooms.insert(
+                                room_uuid,
+                                Room {
+                                    uuid: room_uuid,
+                                    name: room.name,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        todo!()
     }
 
     fn canceller_thread<M>() -> (JoinHandle<()>, oneshot::Sender<M>, CancellationToken)

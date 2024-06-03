@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "server",
-    "tui"
+    "client"
 ]
 
 [workspace.lints.rust]

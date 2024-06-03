@@ -1733,7 +1733,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2047c6ded9c721764247e62cd3b03c09ffc529b2ba5b10ec482ae507a4a70160"
 
 [[package]]
-name = "tcp-chat"
+name = "tcp-chat-client"
+version = "0.1.0"
+dependencies = [
+ "color-eyre",
+ "crossterm",
+ "ratatui",
+ "tcp-chat-server",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "uuid",
+]
+
+[[package]]
+name = "tcp-chat-server"
 version = "0.1.0"
 dependencies = [
  "blake3",
@@ -1754,20 +1769,6 @@ dependencies = [
  "tonic-build",
  "tracing",
  "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "tcp-chat-tui"
-version = "0.1.0"
-dependencies = [
- "color-eyre",
- "crossterm",
- "ratatui",
- "tcp-chat",
- "tokio",
- "tokio-util",
- "tonic",
  "uuid",
 ]
 
