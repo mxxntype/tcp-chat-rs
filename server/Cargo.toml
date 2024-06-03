@@ -1,5 +1,5 @@
 [package]
-name = "tcp-chat"
+name = "tcp-chat-server"
 version = "0.1.0"
 edition = "2021"
 authors = ["mxxntype <59417007+mxxntype@users.noreply.github.com>"]

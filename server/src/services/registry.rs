@@ -73,7 +73,7 @@ impl proto::registry_server::Registry for Registry {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip_all, fields(username, uuid))]
     async fn login_as_user(
         &self,
         request: Request<UserCredentials>,
@@ -89,6 +89,7 @@ impl proto::registry_server::Registry for Registry {
         use diesel::{ExpressionMethods, OptionalExtension, RunQueryDsl, SelectableHelper};
 
         let mut credentials = request.into_inner();
+        tracing::Span::current().record("username", &credentials.username);
 
         // Hash the password using Blake3 hash function.
         credentials.password = blake3::hash(credentials.password.as_bytes()).to_string();
@@ -104,15 +105,17 @@ impl proto::registry_server::Registry for Registry {
         match candidate_user {
             // A an account with matching credentials exist, returns its UUID and token.
             Some(user) => {
-                tracing::info!(message = "Successful login", username = ?credentials.username);
+                tracing::Span::current().record("uuid", user.uuid.to_string());
+                tracing::info!("Login succeeded");
                 Ok(Response::new(user.auth_pair()))
             }
 
             // No matching username+password pair was found, reject.
             None => {
-                let msg = "Invalid username or password";
-                tracing::warn!(message = msg, username = ?credentials.username);
-                Err(Status::unauthenticated(msg))
+                tracing::Span::current().record("uuid", "<not found>");
+                let message = "Login failed: Invalid username or password";
+                tracing::warn!(message);
+                Err(Status::unauthenticated(message))
             }
         }
     }

@@ -1,4 +1,4 @@
-use tcp_chat::TCPChat;
+use tcp_chat_server::TCPChat;
 
 #[tokio::main]
 async fn main() {
