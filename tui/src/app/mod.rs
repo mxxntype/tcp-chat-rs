@@ -6,10 +6,12 @@ pub use chat::Chat;
 pub use interceptor::Interceptor;
 pub use registry::Registry;
 
+use crate::app::registry::EditingMode;
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::style::{Style, Stylize};
 use ratatui::widgets::{Block, Paragraph, Wrap};
 use ratatui::{text::Line, Terminal};
 use std::{io, panic, time::Duration};
@@ -18,7 +20,16 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug)]
-pub struct App<B: Backend> {
+pub enum Stage {
+    NotLoggedIn(Registry),
+    LoggedIn(Chat<Interceptor>),
+}
+
+#[derive(Debug)]
+pub struct App<B>
+where
+    B: Backend,
+{
     stage: Stage,
     terminal: Terminal<B>,
 }
@@ -36,11 +47,14 @@ impl App<CrosstermBackend<io::Stderr>> {
     }
 }
 
-impl<B: Backend + Sync> App<B> {
+impl<B> App<B>
+where
+    B: Backend + Sync,
+{
     pub async fn run(&mut self) -> io::Result<()> {
         self.setup_terminal()?;
 
-        let (canceller_thread, canceller_tx, _) = Self::canceller_thread::<()>();
+        let (canceller_thread, cancel_signal, _) = Self::canceller_thread::<()>();
 
         // TODO: Summon server threads.
         // let _ = tokio::spawn(async move {
@@ -59,20 +73,27 @@ impl<B: Backend + Sync> App<B> {
                         continue;
                     }
 
+                    // Quit with no questions asked if the user hits Escape.
                     if event.code == KeyCode::Esc {
-                        let _ = canceller_tx.send(());
+                        let _ = cancel_signal.send(());
                         break;
                     }
 
+                    // A flag that turns to `true` when the users confirms the credentials.
                     let mut attempt_login = false;
+
                     match &mut self.stage {
                         Stage::NotLoggedIn(registry) => match event.code {
-                            KeyCode::Char(c) => match registry.editing_mode() {
-                                registry::EditingMode::Username => registry.username.push(c),
-                                registry::EditingMode::Password => registry.password.push(c),
-                            },
+                            KeyCode::Char(c) => {
+                                registry.failed = false;
+                                match registry.editing_mode() {
+                                    registry::EditingMode::Username => registry.username.push(c),
+                                    registry::EditingMode::Password => registry.password.push(c),
+                                }
+                            }
 
-                            KeyCode::Backspace => {
+                            KeyCode::Backspace | KeyCode::Delete => {
+                                registry.failed = false;
                                 match registry.editing_mode() {
                                     registry::EditingMode::Username => registry.username.pop(),
                                     registry::EditingMode::Password => registry.password.pop(),
@@ -84,7 +105,7 @@ impl<B: Backend + Sync> App<B> {
                                 registry::EditingMode::Password => attempt_login = true,
                             },
 
-                            KeyCode::Tab => registry.toggle_mode(),
+                            KeyCode::Tab | KeyCode::BackTab => registry.toggle_mode(),
 
                             _ => {}
                         },
@@ -92,11 +113,14 @@ impl<B: Backend + Sync> App<B> {
                         Stage::LoggedIn(_) => {}
                     }
 
+                    // Attempt to login with the provided credentials, anvancing to `Stage::LoggedIn` if successful.
+                    //
+                    // TODO: If the credentials are incorrect or something goes wrong, notify the user of the error.
                     if attempt_login {
-                        if let Stage::NotLoggedIn(registry) = &self.stage {
+                        if let Stage::NotLoggedIn(registry) = &mut self.stage {
                             match registry.clone().into_chat().await {
                                 Ok(chat) => self.stage = Stage::LoggedIn(chat),
-                                Err(_) => todo!("Handle incorrect credentials"),
+                                Err(_) => registry.failed = true,
                             }
                         }
                     }
@@ -104,7 +128,7 @@ impl<B: Backend + Sync> App<B> {
             }
         }
 
-        // Shut everything down.
+        // Clean up after ourselves by shutting down spawned threads and resetting the terminal.
         let _ = canceller_thread.await;
         Self::reset_terminal();
         self.terminal.show_cursor()?;
@@ -134,45 +158,99 @@ impl<B: Backend + Sync> App<B> {
                 self.terminal.draw(|frame| {
                     let vertical_areas = Layout::default()
                         .direction(Direction::Vertical)
-                        .constraints(Constraint::from_fills([1, 1, 1]))
+                        .constraints([
+                            Constraint::Fill(2),
+                            Constraint::Length(8),
+                            Constraint::Fill(3),
+                        ])
                         .split(frame.size());
                     let horizontal_areas = Layout::default()
                         .direction(Direction::Horizontal)
-                        .constraints(Constraint::from_fills([1, 4, 1]))
-                        .split(*vertical_areas.get(1).unwrap());
+                        .constraints([
+                            Constraint::Fill(1),
+                            Constraint::Percentage(80),
+                            Constraint::Fill(1),
+                        ])
+                        .split(vertical_areas[1]);
 
-                    let central_area = horizontal_areas.get(1).unwrap();
-                    let block = Block::bordered()
-                        .title_top(" Welcome! Log into your account... ")
-                        .title_bottom(Line::from(" Tab to switch line ").left_aligned())
-                        .title_bottom(Line::from(" Enter to log in ").right_aligned());
+                    // Render the borders of the input area, as well as navigation hints.
+                    let input_area = horizontal_areas[1];
+                    let hint_style = Style::default().italic().dark_gray();
+                    let title_top = " Welcome! Log into your account... ";
+                    let title_top = Line::styled(title_top, Style::default().bold().magenta());
+                    let title_bottom_left = Line::styled(" <Tab> to switch field ", hint_style);
+                    let title_bottom_right = Line::styled(" <Enter> to log in ", hint_style);
+                    let mut input_area_border = Block::bordered()
+                        .border_style(Style::new().bold().black())
+                        .title_top(title_top.centered())
+                        .title_bottom(title_bottom_left.left_aligned())
+                        .title_bottom(title_bottom_right.right_aligned());
+                    if registry.failed {
+                        input_area_border = input_area_border.title_bottom(
+                            Line::styled(
+                                "Invalid username or password!",
+                                Style::default().bold().red(),
+                            )
+                            .centered(),
+                        );
+                    }
+                    frame.render_widget(input_area_border, input_area);
 
-                    let text = format!(
-                        "{} Username: {:?}\n{} Password: {:?}",
-                        if *registry.editing_mode() == registry::EditingMode::Username {
-                            '>'
-                        } else {
-                            ' '
-                        },
-                        registry.username.as_str(),
-                        if *registry.editing_mode() == registry::EditingMode::Password {
-                            '>'
-                        } else {
-                            ' '
-                        },
-                        registry.password.as_str()
+                    // Split the input are in half vertically.
+                    let input_area_halves = Layout::vertical(Constraint::from_lengths([3, 3]))
+                        .vertical_margin(1)
+                        .horizontal_margin(2)
+                        .flex(ratatui::layout::Flex::Start)
+                        .split(input_area);
+
+                    // Render the username field in the top part.
+                    let focused = *registry.editing_mode() == EditingMode::Username;
+                    let username_area =
+                        Layout::horizontal([Constraint::Length(10), Constraint::Fill(1)])
+                            .split(input_area_halves[0]);
+                    let username =
+                        format!("{}{}", registry.username, if focused { "_" } else { "" });
+                    let mut username_label = Paragraph::new("\nUsername:");
+                    let mut username_field = Paragraph::new(username)
+                        .style(Style::default().bold())
+                        .block(Block::bordered());
+                    if focused {
+                        username_label = username_label.style(Style::default().bold());
+                        username_field = username_field
+                            .block(Block::bordered().border_style(Style::default().magenta()));
+                    }
+                    frame.render_widget(username_label, username_area[0]);
+                    frame.render_widget(username_field, username_area[1]);
+
+                    // Render the password field in the bottom part.
+                    let focused: bool = *registry.editing_mode() == EditingMode::Password;
+                    let password_area =
+                        Layout::horizontal([Constraint::Length(10), Constraint::Fill(1)])
+                            .split(input_area_halves[1]);
+                    let mut password_label = Paragraph::new("\nPassword:");
+                    let obfuscated_password = format!(
+                        "{}{}",
+                        registry.password.chars().map(|_| '*').collect::<String>(),
+                        if focused { "_" } else { "" }
                     );
-
-                    let widget = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
-                    frame.render_widget(widget, *central_area);
+                    let mut password_field = Paragraph::new(obfuscated_password.as_str())
+                        .style(Style::default().bold())
+                        .block(Block::bordered());
+                    if focused {
+                        password_label = password_label.style(Style::default().bold());
+                        password_field = password_field
+                            .block(Block::bordered().border_style(Style::default().magenta()));
+                    }
+                    frame.render_widget(password_label, password_area[0]);
+                    frame.render_widget(password_field, password_area[1]);
                 })?;
             }
 
             Stage::LoggedIn(chat) => {
                 self.terminal.draw(|frame| {
-                    let text = format!("{:?}", &chat.user);
                     frame.render_widget(
-                        Paragraph::new(text)
+                        Paragraph::new(format!("{:?}", &chat.user))
+                            .style(Style::default().bold())
                             .block(Block::bordered())
                             .wrap(Wrap { trim: false }),
                         frame.size(),
@@ -203,10 +281,4 @@ impl<B: Backend + Sync> App<B> {
         let _ = terminal::disable_raw_mode();
         let _ = crossterm::execute!(io::stderr(), LeaveAlternateScreen, DisableMouseCapture);
     }
-}
-
-#[derive(Debug)]
-pub enum Stage {
-    NotLoggedIn(Registry),
-    LoggedIn(Chat<Interceptor>),
 }

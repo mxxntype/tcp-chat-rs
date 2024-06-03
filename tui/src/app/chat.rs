@@ -13,7 +13,10 @@ type RoomUUID = uuid::Uuid;
 type MessageUUID = uuid::Uuid;
 
 #[derive(Debug)]
-pub struct Chat<I: Interceptor> {
+pub struct Chat<I>
+where
+    I: Interceptor,
+{
     /// gRPC clients for easy access.
     pub(crate) client: ChatClient<InterceptedService<Channel, I>>,
 
@@ -60,7 +63,10 @@ impl Chat<crate::app::Interceptor> {
     }
 }
 
-impl<I: Interceptor> Deref for Chat<I> {
+impl<I> Deref for Chat<I>
+where
+    I: Interceptor,
+{
     type Target = ChatClient<InterceptedService<Channel, I>>;
 
     fn deref(&self) -> &Self::Target {
@@ -68,7 +74,10 @@ impl<I: Interceptor> Deref for Chat<I> {
     }
 }
 
-impl<I: Interceptor> DerefMut for Chat<I> {
+impl<I> DerefMut for Chat<I>
+where
+    I: Interceptor,
+{
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.client
     }

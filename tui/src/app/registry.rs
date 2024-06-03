@@ -12,14 +12,16 @@ pub struct Registry {
     pub password: String,
     client: RegistryClient<Channel>,
     editing_mode: EditingMode,
+    pub failed: bool,
 }
 
 impl Registry {
     pub async fn new() -> Self {
         Self {
-            editing_mode: Default::default(),
-            username: Default::default(),
-            password: Default::default(),
+            editing_mode: EditingMode::default(),
+            username: String::default(),
+            password: String::default(),
+            failed: false,
             client: {
                 let tls_config = ClientTlsConfig::new()
                     .ca_certificate(Certificate::from_pem(crate::TLS_CERT))
@@ -41,7 +43,7 @@ impl Registry {
     }
 
     pub fn toggle_mode(&mut self) {
-        match self.editing_mode {
+        match &self.editing_mode {
             EditingMode::Username => self.editing_mode = EditingMode::Password,
             EditingMode::Password => self.editing_mode = EditingMode::Username,
         }
@@ -56,13 +58,15 @@ impl Registry {
             .into_inner();
         let proto_uuid = auth_pair
             .user_uuid
-            .expect("The server did not return a user UUID");
-        let uuid = Uuid::try_from(proto_uuid).expect("The server returned an invalid user UUID");
+            .ok_or_else(|| Status::invalid_argument("The server did not return a user UUID"))?;
+        let uuid = Uuid::try_from(proto_uuid)
+            .map_err(|_| Status::invalid_argument("The server returned an invalid user UUID"))?;
         let auth_token = auth_pair
             .token
-            .expect("The server did not return an AuthToken")
+            .ok_or_else(|| Status::invalid_argument("The server did not provide an AuthToken!"))?
             .to_string();
 
+        self.failed = false;
         let user = User {
             uuid,
             username: self.username,
