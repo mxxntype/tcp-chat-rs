@@ -1,8 +1,6 @@
-version: "3.8"
-
 services:
     postgresql:
-        image: huecker.io/library/postgres:16
+        image: library/postgres:16
         hostname: ${POSTGRES_HOST}
         restart: unless-stopped
         env_file:
@@ -24,7 +22,7 @@ services:
             - postgresql
 
     redis:
-        image: huecker.io/library/redis:latest
+        image: library/redis:latest
         hostname: ${REDIS_HOST}
         restart: unless-stopped
         env_file:
@@ -50,7 +48,7 @@ services:
             - redis
 
     pgadmin:
-        image: huecker.io/elestio/pgadmin:latest
+        image: elestio/pgadmin:latest
         restart: unless-stopped
         env_file:
             - .envrc
@@ -62,7 +60,7 @@ services:
             - postgresql
 
     # llm:
-    #     image: huecker.io/ollama/ollama:latest
+    #     image: ollama/ollama:latest
     #     hostname: ${LLM_HOST}
     #     restart: unless-stopped
     #     tty: true
@@ -82,4 +80,4 @@ services:
 volumes:
     postgresql-data:
     pgadmin-data:
-    llm:
+    # llm:

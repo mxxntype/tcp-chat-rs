@@ -12,18 +12,13 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::Terminal;
 use std::{io, panic, time::Duration};
-use tcp_chat_server::entities::Room;
-use tcp_chat_server::proto::serverside_user_event::Event as UserEvent;
-use tcp_chat_server::proto::ServersideUserEvent;
 use tokio::{sync::oneshot, task::JoinHandle};
-use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
 #[derive(Debug)]
 pub enum Stage {
-    NotLoggedIn(Registry),
-    LoggedIn(Chat<Interceptor>),
+    NotLoggedIn { registry: Registry },
+    LoggedIn { chat: Chat<Interceptor> },
 }
 
 #[derive(Debug)]
@@ -42,7 +37,7 @@ impl App<CrosstermBackend<io::Stderr>> {
         let registry = Registry::new().await;
 
         Self {
-            stage: Stage::NotLoggedIn(registry),
+            stage: Stage::NotLoggedIn { registry },
             terminal,
         }
     }
@@ -81,11 +76,8 @@ where
                         break;
                     }
 
-                    // A flag that turns to `true` when the users confirms the credentials.
-                    let mut attempt_login = false;
-
-                    match &mut self.stage {
-                        Stage::NotLoggedIn(registry) => match event.code {
+                    match self.stage {
+                        Stage::NotLoggedIn { ref mut registry } => match event.code {
                             KeyCode::Char(c) => {
                                 registry.failed = false;
                                 match registry.editing_mode() {
@@ -102,29 +94,14 @@ where
                                 };
                             }
 
-                            KeyCode::Enter => match registry.editing_mode() {
-                                registry::EditingMode::Username => registry.toggle_mode(),
-                                registry::EditingMode::Password => attempt_login = true,
-                            },
+                            KeyCode::Enter => self.attempt_login().await,
 
                             KeyCode::Tab | KeyCode::BackTab => registry.toggle_mode(),
 
                             _ => {}
                         },
 
-                        Stage::LoggedIn(_) => {}
-                    }
-
-                    // Attempt to login with the provided credentials, anvancing to `Stage::LoggedIn` if successful.
-                    //
-                    // TODO: If the credentials are incorrect or something goes wrong, notify the user of the error.
-                    if attempt_login {
-                        if let Stage::NotLoggedIn(registry) = &mut self.stage {
-                            match registry.clone().into_chat().await {
-                                Ok(chat) => self.stage = Stage::LoggedIn(chat),
-                                Err(_) => registry.failed = true,
-                            }
-                        }
+                        Stage::LoggedIn { .. } => {}
                     }
                 }
             }
@@ -136,43 +113,6 @@ where
         self.terminal.show_cursor()?;
 
         Ok(())
-    }
-
-    async fn user_event_thread(&mut self) {
-        if let Stage::LoggedIn(chat) = &mut self.stage {
-            let mut event_stream = chat
-                .subscribe_to_user(())
-                .await
-                .expect("Could not subscribe to user events")
-                .into_inner();
-
-            while let Some(Ok(ServersideUserEvent {
-                event: Some(event), ..
-            })) = event_stream.next().await
-            {
-                match event {
-                    UserEvent::AddedToRoom(proto_room_uuid) => {
-                        let room_uuid = Uuid::try_from(proto_room_uuid.clone())
-                            .expect("Server returned invalid room UUID");
-                        if !chat.rooms.contains_key(&room_uuid) {
-                            let room = chat
-                                .lookup_room(proto_room_uuid)
-                                .await
-                                .expect("Could not look up room")
-                                .into_inner();
-                            let _ = chat.rooms.insert(
-                                room_uuid,
-                                Room {
-                                    uuid: room_uuid,
-                                    name: room.name,
-                                },
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        todo!()
     }
 
     fn canceller_thread<M>() -> (JoinHandle<()>, oneshot::Sender<M>, CancellationToken)
@@ -189,6 +129,19 @@ where
         });
 
         (handle, tx, token_clone)
+    }
+
+    #[allow(clippy::significant_drop_in_scrutinee)]
+    async fn attempt_login(&mut self) {
+        if let Stage::NotLoggedIn { registry } = &mut self.stage {
+            match registry.clone().into_chat().await {
+                Err(_) => registry.failed = true,
+                Ok(mut chat) => {
+                    chat.load_data().await.unwrap();
+                    self.stage = Stage::LoggedIn { chat }
+                }
+            }
+        }
     }
 
     fn setup_terminal(&mut self) -> io::Result<()> {

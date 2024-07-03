@@ -14,11 +14,11 @@ where
     /// Render the UI.
     pub(super) fn render_ui(&mut self) -> io::Result<()> {
         match &self.stage {
-            Stage::NotLoggedIn(_) => {
+            Stage::NotLoggedIn { registry: _ } => {
                 self.render_login_screen()?;
             }
 
-            Stage::LoggedIn(_) => {
+            Stage::LoggedIn { chat: _ } => {
                 self.render_main_screen()?;
             }
         }
@@ -28,10 +28,10 @@ where
 
     /// Draw the main screen of the application.
     fn render_main_screen(&mut self) -> Result<(), io::Error> {
-        if let Stage::LoggedIn(chat) = &self.stage {
+        if let Stage::LoggedIn { chat } = &self.stage {
             self.terminal.draw(|frame| {
                 frame.render_widget(
-                    Paragraph::new(format!("{:?}", chat.user))
+                    Paragraph::new(format!("{chat:#?}"))
                         .style(Style::default().bold())
                         .block(Block::bordered())
                         .wrap(Wrap { trim: false }),
@@ -45,7 +45,7 @@ where
 
     /// Render the login screen.
     fn render_login_screen(&mut self) -> Result<(), io::Error> {
-        if let Stage::NotLoggedIn(registry) = &self.stage {
+        if let Stage::NotLoggedIn { registry } = &self.stage {
             self.terminal.draw(|frame| {
                 let vertical_areas = Layout::default()
                     .direction(Direction::Vertical)
