@@ -17,6 +17,7 @@ uuid = { version = "1.8.0", features = ["v4"] }
 crossterm = "0.27.0"
 tokio-util = "0.7.11"
 tokio-stream = "0.1.15"
+indexmap = "2.2.6"
 
 [lints]
 workspace = true

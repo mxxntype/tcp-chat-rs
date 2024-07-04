@@ -11,7 +11,9 @@ use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, Key
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::Terminal;
+use std::mem;
 use std::{io, panic, time::Duration};
+use tcp_chat_server::proto::{self, ClientsideMessage};
 use tokio::{sync::oneshot, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
@@ -61,7 +63,7 @@ where
         // });
 
         loop {
-            self.render_ui()?;
+            self.render_ui().await?;
 
             if event::poll(Duration::from_millis(100))? {
                 if let Event::Key(event) = event::read()? {
@@ -101,7 +103,36 @@ where
                             _ => {}
                         },
 
-                        Stage::LoggedIn { .. } => {}
+                        Stage::LoggedIn { ref mut chat } => match event.code {
+                            KeyCode::Enter => {
+                                if !chat.message_draft.is_empty() {
+                                    let rooms = chat.rooms.lock().await;
+                                    let room_uuid = match chat.room_list_state.selected() {
+                                        Some(i) => rooms.keys().nth(i).unwrap(),
+                                        None => todo!(),
+                                    };
+
+                                    chat.client
+                                        .lock()
+                                        .await
+                                        .send_message(ClientsideMessage {
+                                            room_uuid: Some(proto::Uuid::from(*room_uuid)),
+                                            text: mem::take(&mut chat.message_draft),
+                                        })
+                                        .await
+                                        .unwrap();
+
+                                    drop(rooms);
+                                }
+                            }
+
+                            KeyCode::Char(c) => chat.message_draft.push(c),
+                            KeyCode::Backspace => {
+                                chat.message_draft.pop();
+                            }
+
+                            _ => {}
+                        },
                     }
                 }
             }

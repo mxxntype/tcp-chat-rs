@@ -3,7 +3,7 @@ use super::{App, Stage};
 use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Style, Stylize};
-use ratatui::widgets::{Block, Paragraph, Wrap};
+use ratatui::widgets::{Block, List, ListDirection, Paragraph};
 use ratatui::{text::Line, Frame};
 use std::{io, rc::Rc};
 
@@ -12,14 +12,14 @@ where
     B: Backend + Send + Sync,
 {
     /// Render the UI.
-    pub(super) fn render_ui(&mut self) -> io::Result<()> {
+    pub(super) async fn render_ui(&mut self) -> io::Result<()> {
         match &self.stage {
             Stage::NotLoggedIn { registry: _ } => {
                 self.render_login_screen()?;
             }
 
             Stage::LoggedIn { chat: _ } => {
-                self.render_main_screen()?;
+                self.render_main_screen().await?;
             }
         }
 
@@ -27,16 +27,82 @@ where
     }
 
     /// Draw the main screen of the application.
-    fn render_main_screen(&mut self) -> Result<(), io::Error> {
-        if let Stage::LoggedIn { chat } = &self.stage {
+    async fn render_main_screen(&mut self) -> Result<(), io::Error> {
+        if let Stage::LoggedIn { ref mut chat } = self.stage {
+            let rooms = chat.rooms.lock().await;
+            let messages = chat.messages.lock().await;
+            let users = chat.users.lock().await;
+
             self.terminal.draw(|frame| {
-                frame.render_widget(
-                    Paragraph::new(format!("{chat:#?}"))
-                        .style(Style::default().bold())
-                        .block(Block::bordered())
-                        .wrap(Wrap { trim: false }),
-                    frame.size(),
+                let sections = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Fill(1), Constraint::Fill(2)])
+                    .split(frame.size());
+                let room_list_area = sections.first().unwrap();
+                let sections = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Fill(1), Constraint::Length(2)])
+                    .split(*sections.get(1).unwrap());
+                let message_list_area = sections.first().unwrap();
+                let draft_area = sections.get(1).unwrap();
+
+                // Render the list of user's rooms.
+                let room_list = List::new(
+                    rooms
+                        .values()
+                        .map(|room| Line::from(format!(" {} ", room.name))),
+                )
+                .highlight_style(Style::default().on_dark_gray().bold())
+                .block(
+                    Block::bordered()
+                        .border_style(Style::default().dark_gray())
+                        .title_top(Line::from(" Rooms ").left_aligned())
+                        .title_style(Style::default().white().bold()),
                 );
+                if !rooms.is_empty() {
+                    chat.room_list_state.select(Some(0));
+                }
+
+                // Render the messages in the focused room.
+                let focused_room_uuid = chat
+                    .room_list_state
+                    .selected()
+                    .and_then(|i| messages.values().map(|m| &m.room_uuid).nth(i));
+                let message_list = List::new(
+                    messages
+                        .values()
+                        .rev()
+                        .filter(|msg| Some(&msg.room_uuid) == focused_room_uuid)
+                        .map(|msg| {
+                            format!(
+                                " ({}) {}",
+                                users.get(&msg.sender_uuid).map_or("unknown", |user| {
+                                    if msg.sender_uuid == chat.user.uuid {
+                                        return "you";
+                                    }
+                                    user.username.as_str()
+                                }),
+                                msg.text
+                            )
+                        }),
+                )
+                .direction(ListDirection::BottomToTop)
+                .block(
+                    Block::bordered()
+                        .border_style(Style::default().dark_gray())
+                        .title_top(Line::from(" Messages ").left_aligned())
+                        .title_style(Style::default().white().bold()),
+                );
+
+                // Render the message draft (where the user types in the message).
+                let message_draft = Paragraph::new(Line::styled(
+                    format!(" (msg) > {}_", chat.message_draft),
+                    Style::default().green().bold(),
+                ));
+
+                frame.render_stateful_widget(room_list, *room_list_area, &mut chat.room_list_state);
+                frame.render_widget(message_list, *message_list_area);
+                frame.render_widget(message_draft, *draft_area);
             })?;
         }
 

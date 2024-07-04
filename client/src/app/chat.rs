@@ -1,11 +1,14 @@
 use color_eyre::eyre;
-use std::collections::HashMap;
+use indexmap::IndexMap;
+use ratatui::widgets::ListState;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tcp_chat_server::entities::{Message, Room, User};
-use tcp_chat_server::proto;
 use tcp_chat_server::proto::chat_client::ChatClient;
+use tcp_chat_server::proto::serverside_room_event::Event::NewMessage;
 use tcp_chat_server::proto::serverside_user_event::Event::AddedToRoom;
+use tcp_chat_server::proto::user_lookup_request::Identifier;
+use tcp_chat_server::proto::{self, UserLookupRequest};
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use tonic::service::interceptor::InterceptedService;
@@ -18,7 +21,7 @@ type UserUUID = Uuid;
 type RoomUUID = Uuid;
 type MessageUUID = Uuid;
 
-type Cache<K, V> = Arc<Mutex<HashMap<K, V>>>;
+type Cache<K, V> = Arc<Mutex<IndexMap<K, V>>>;
 
 #[allow(unused)]
 #[derive(Debug)]
@@ -37,6 +40,9 @@ where
 
     /// An intermediate buffer to hold the message being written.
     pub(crate) message_draft: String,
+
+    /// The UUID of the room the user currently has opened (focused).
+    pub(crate) room_list_state: ListState,
 
     /// A list of users known to this session.
     /// Acts as a cache to avoid unnecessary lookup requests to the server.
@@ -68,9 +74,10 @@ impl Chat<crate::app::Interceptor> {
             user: user.clone(),
             refreshed: false,
             message_draft: String::default(),
-            users: Arc::new(Mutex::new(HashMap::new())),
-            rooms: Arc::new(Mutex::new(HashMap::new())),
-            messages: Arc::new(Mutex::new(HashMap::new())),
+            room_list_state: ListState::default(),
+            users: Arc::new(Mutex::new(IndexMap::new())),
+            rooms: Arc::new(Mutex::new(IndexMap::new())),
+            messages: Arc::new(Mutex::new(IndexMap::new())),
             client: {
                 Arc::new(Mutex::new(ChatClient::with_interceptor(
                     channel,
@@ -128,66 +135,23 @@ where
             let uuid = Uuid::try_from(untrusted_uuid)?;
 
             let _ = room_cache.insert(uuid, Room { uuid, name: r.name });
-            Self::load_static_messages(uuid, Arc::clone(&self.client), Arc::clone(&self.messages))
-                .await?;
+            Self::load_static_messages(
+                uuid,
+                Arc::clone(&self.client),
+                Arc::clone(&self.messages),
+                Arc::clone(&self.users),
+            )
+            .await?;
+            Self::room_event_thread(
+                uuid,
+                Arc::clone(&self.client),
+                Arc::clone(&self.messages),
+                Arc::clone(&self.users),
+            );
         }
         drop(room_cache);
 
         Ok(())
-    }
-
-    /// Spawns an `async` task that listens for any [`ServersideUserEvents`] and handles them accordingly.
-    ///
-    /// # Panics
-    ///
-    /// Panics if there are any errors while the subscription is active or being initiated.
-    /// "errors while the subscription is active" means missing or invalid room metadata.
-    fn user_event_thread(&mut self) {
-        let rooms = Arc::clone(&self.rooms);
-        let client = Arc::clone(&self.client);
-        let messages_arc = Arc::clone(&self.messages);
-
-        tokio::spawn(async move {
-            let mut stream = client
-                .lock()
-                .await
-                .subscribe_to_user(())
-                .await
-                .expect("Could not subscribe to user events")
-                .into_inner();
-            while let Some(Ok(event)) = stream.next().await {
-                match event
-                    .event
-                    .expect("The server sent an event message with no actual event inside")
-                {
-                    AddedToRoom(untrusted_room_uuid) => {
-                        let room = client
-                            .lock()
-                            .await
-                            .lookup_room(untrusted_room_uuid.clone())
-                            .await
-                            .unwrap_or_else(|_| panic!("Could not query the server about room with UUID {untrusted_room_uuid:#?}"))
-                            .into_inner();
-                        let uuid = room
-                            .uuid
-                            .expect("The server did not provide the room's UUID")
-                            .try_into()
-                            .expect("The server-provided room UUID is invalid");
-                        rooms.lock().await.insert(
-                            uuid,
-                            Room {
-                                uuid,
-                                name: room.name,
-                            },
-                        );
-
-                        Self::load_static_messages(uuid, Arc::clone(&client), messages_arc.clone())
-                            .await
-                            .unwrap_or_else(|_| panic!("Couldn't load messages for room {uuid:?}"));
-                    }
-                }
-            }
-        });
     }
 
     /// Loads all static* messages for a specified room.
@@ -207,6 +171,7 @@ where
         room_uuid: Uuid,
         client_arc: Arc<Mutex<ChatClient<InterceptedService<Channel, I>>>>,
         messages_arc: Cache<MessageUUID, Message>,
+        users_arc: Cache<UserUUID, proto::User>,
     ) -> eyre::Result<()> {
         let messages = client_arc
             .lock()
@@ -243,8 +208,170 @@ where
                     timestamp,
                 },
             );
+
+            let mut users = users_arc.lock().await;
+            if users.get(&sender_uuid).is_none() {
+                let _ = users.insert(
+                    sender_uuid,
+                    client_arc
+                        .lock()
+                        .await
+                        .lookup_user(UserLookupRequest {
+                            identifier: Some(Identifier::Uuid(sender_uuid.into())),
+                        })
+                        .await
+                        .unwrap()
+                        .into_inner(),
+                );
+            }
+            drop(users);
         }
 
         Ok(())
+    }
+
+    /// Spawns an `async` task that listens for any [`ServersideUserEvent`]s and handles them accordingly.
+    ///
+    /// # Panics
+    ///
+    /// Panics if there are any errors while the subscription is active or being initiated.
+    /// "errors while the subscription is active" means missing or invalid room metadata.
+    fn user_event_thread(&mut self) {
+        let client = Arc::clone(&self.client);
+        let rooms = Arc::clone(&self.rooms);
+        let messages_arc = Arc::clone(&self.messages);
+        let users = Arc::clone(&self.users);
+
+        tokio::spawn(async move {
+            let mut stream = client
+                .lock()
+                .await
+                .subscribe_to_user(())
+                .await
+                .expect("Could not subscribe to user events")
+                .into_inner();
+            while let Some(Ok(event)) = stream.next().await {
+                match event
+                    .event
+                    .expect("The server sent an event message with no actual event inside")
+                {
+                    AddedToRoom(untrusted_room_uuid) => {
+                        let room = client
+                            .lock()
+                            .await
+                            .lookup_room(untrusted_room_uuid.clone())
+                            .await
+                            .unwrap_or_else(|_| panic!("Could not query the server about room with UUID {untrusted_room_uuid:#?}"))
+                            .into_inner();
+                        let uuid = room
+                            .uuid
+                            .expect("The server did not provide the room's UUID")
+                            .try_into()
+                            .expect("The server-provided room UUID is invalid");
+                        rooms.lock().await.insert(
+                            uuid,
+                            Room {
+                                uuid,
+                                name: room.name,
+                            },
+                        );
+
+                        Self::load_static_messages(
+                            uuid,
+                            Arc::clone(&client),
+                            messages_arc.clone(),
+                            Arc::clone(&users),
+                        )
+                        .await
+                        .unwrap_or_else(|_| panic!("Couldn't load messages for room {uuid:?}"));
+                        Self::room_event_thread(
+                            uuid,
+                            Arc::clone(&client),
+                            Arc::clone(&messages_arc),
+                            Arc::clone(&users),
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    /// Spawns an `async` task that listens for [`ServersideRoomEvent`]s and handles them accordingly.
+    ///
+    /// # Panics
+    ///
+    /// Panics if there are any errors while the subscription is active or being initiated.
+    /// "errors while the subscription is active" means missing or invalid message metadata.
+    fn room_event_thread(
+        room_uuid: Uuid,
+        client: Arc<Mutex<ChatClient<InterceptedService<Channel, I>>>>,
+        messages: Cache<MessageUUID, Message>,
+        users: Cache<UserUUID, proto::User>,
+    ) {
+        tokio::spawn(async move {
+            let mut stream = client
+                .lock()
+                .await
+                .subscribe_to_room(proto::Uuid::from(room_uuid))
+                .await
+                .unwrap_or_else(|stat| panic!("Couldn't subscribe to room {room_uuid:?}: {stat:?}"))
+                .into_inner();
+
+            while let Some(Ok(event)) = stream.next().await {
+                match event
+                    .event
+                    .unwrap_or_else(|| panic!("Caught an error in room event stream"))
+                {
+                    NewMessage(m) => {
+                        assert_eq!(Some(proto::Uuid::from(room_uuid)), m.room_uuid);
+
+                        // Parse the message's untrused fields.
+                        let untrusted_message_uuid = m
+                            .uuid
+                            .expect("The serverside message did not specify its `uuid`");
+                        let message_uuid = Uuid::try_from(untrusted_message_uuid)
+                            .expect("The serverside message's UUID was invalid");
+                        let untrusted_sender_uuid = m
+                            .sender_uuid
+                            .expect("The serverside message did not specify `sender_uuid`");
+                        let sender_uuid = Uuid::try_from(untrusted_sender_uuid)
+                            .expect("The serverside message's `sender_uuid` was invalid");
+                        let unstrusted_timestamp = m
+                            .timestamp
+                            .expect("The serverside message's `timestamp` was not specified");
+                        let timestamp = SystemTime::try_from(unstrusted_timestamp)
+                            .expect("The serverside message's `timestamp` was invalid");
+
+                        messages.lock().await.insert(
+                            message_uuid,
+                            Message {
+                                uuid: message_uuid,
+                                sender_uuid,
+                                room_uuid,
+                                text: m.text,
+                                timestamp,
+                            },
+                        );
+
+                        let mut users = users.lock().await;
+                        if users.get(&sender_uuid).is_none() {
+                            let _ = users.insert(
+                                sender_uuid,
+                                client
+                                    .lock()
+                                    .await
+                                    .lookup_user(UserLookupRequest {
+                                        identifier: Some(Identifier::Uuid(sender_uuid.into())),
+                                    })
+                                    .await
+                                    .unwrap()
+                                    .into_inner(),
+                            );
+                        }
+                        drop(users);
+                    }
+                }
+            }
+        });
     }
 }
